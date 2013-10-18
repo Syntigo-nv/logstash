@@ -34,11 +34,16 @@ class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
   # The query to use
   config :query, :validate => :string, :default => "*"
 
-  # The scroll timeout, corresponding to the 'scroll' parameter in the 'search/scroll' API of elasticsearch
-  config :scroll_timeout, :validate=> :string, :default => "5m"
+  # Enable the scan search_type.
+  # This will disable sorting but increase speed and performance.
+  config :scan, :validate => :boolean, :default => true
 
-  # The scroll page size, corresponding to the 'size' parameter in the 'search/scroll' API of elasticsearch
-  config :scroll_size, :validate=> :number, :default => 1000
+  # This allows you to set the number of items you get back per scroll
+  config :size, :validate => :number, :default => 1000
+
+  # this parameter controls the keep alive time of the scrolling request and initiates the scrolling process.
+  # The timeout applies per round trip (i.e. between the previous scan scroll request, to the next).
+  config :scroll, :validate => :string, :default => "1m"
 
   # If true, the event will include meta data of the original elastic document: index ('_index') , document ('_type') and document id ('_id'). By default storted in an 'es_meta' field.
   # This metadata can be used to in reindexing scenarios to update rather than append existing indices 
@@ -81,27 +86,52 @@ class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
     @agent = FTW::Agent.new
     params = {
       "q" => @query,
-      "scroll" => @scroll_timeout,
-      "size" => @scroll_size,
+      "scroll" => @scroll,
+      "size" => "#{@size}",
     }
+
+    params['search_type'] = "scan" if @scan
+
     @url = "http://#{@host}:#{@port}/#{@index}/_search?#{encode(params)}"
   end # def register
 
   private
   def encode(hash)
     return hash.collect do |key, value|
-      CGI.escape(key.to_s) + "=" + CGI.escape(value.to_s)
+      CGI.escape(key) + "=" + CGI.escape(value)
     end.join("&")
   end # def encode
 
   public
   def run(output_queue)
+
     @logger.debug("scroll initialization",:request => @url)
+    # Execute the search request
     response = @agent.get!(@url)
     json = ""
     response.read_body { |c| json << c }
     result = JSON.parse(json)
     scroll_url = @url
+
+    # When using the search_type=scan we don't get an initial result set.
+    # So we do it here.
+    if @scan and not result.nil? and not result["_scroll_id"].nil?    
+      scroll_id = result["_scroll_id"]
+      scroll_params = {
+        "scroll_id" => scroll_id,
+        "scroll" => @scroll
+      }
+
+      scroll_url = "http://#{@host}:#{@port}/_search/scroll?#{encode(scroll_params)}"
+      @logger.debug("initial scan",:request => scroll_url)
+      
+      response = @agent.get!(scroll_url)
+      json = ""
+      response.read_body { |c| json << c }
+      result = JSON.parse(json)
+
+    end
+
     while true
       break if result.nil?
       if result["error"]
@@ -112,7 +142,7 @@ class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
       hits = result["hits"]["hits"]
       break if hits.empty?
 
-      result["hits"]["hits"].each do |hit|
+      hits.each do |hit|
         event = hit["_source"]
         if @include_meta 
            event[@meta_field] = { 
@@ -128,16 +158,17 @@ class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
         end
       end
 
-      scroll_id = result["_scroll_id"] 
+      # Get the scroll id from the previous result set and use it for getting the next data set
+      scroll_id = result["_scroll_id"]
       if scroll_id.nil?
          @logger.warn("no _scroll_id in result", :request => scroll_url)
          break 
       end
 
-      # Fetch until we get no hits
-      scroll_params = { 
-        "scroll" => @scroll_timeout,
-        "scroll_id" => scroll_id
+      # Fetch the next result set
+      scroll_params = {
+        "scroll_id" => scroll_id,
+        "scroll" => @scroll
       }
       scroll_url = "http://#{@host}:#{@port}/_search/scroll?#{encode(scroll_params)}"
       @logger.debug("scroll request",:request => scroll_url)
