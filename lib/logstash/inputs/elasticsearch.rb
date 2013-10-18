@@ -16,7 +16,6 @@ require "logstash/util/socket_peer"
 #       }
 #     }
 #
-# * TODO(sissel): configurable scroll timeout
 # * TODO(sissel): Option to keep the index, type, and doc id so we can do reindexing?
 class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
   config_name "elasticsearch"
@@ -72,23 +71,26 @@ class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
   public
   def run(output_queue)
 
+    @logger.debug("scroll initialization",:request => @url)
     # Execute the search request
     response = @agent.get!(@url)
     json = ""
     response.read_body { |c| json << c }
     result = JSON.parse(json)
-    scroll_id = result["_scroll_id"]
 
     # When using the search_type=scan we don't get an initial result set.
     # So we do it here.
-    if @scan
-
+    if @scan and not result.nil? and not result["_scroll_id"].nil? 
+     
+      scroll_id = result["_scroll_id"]
       scroll_params = {
         "scroll_id" => scroll_id,
         "scroll" => @scroll
       }
 
       scroll_url = "http://#{@host}:#{@port}/_search/scroll?#{encode(scroll_params)}"
+      @logger.debug("initial scan",:request => scroll_url)
+      
       response = @agent.get!(scroll_url)
       json = ""
       response.read_body { |c| json << c }
@@ -98,6 +100,11 @@ class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
 
     while true
       break if result.nil?
+      if result["error"]
+        @logger.warn(result["error"], :request => scroll_url)
+        break
+      end
+      
       hits = result["hits"]["hits"]
       break if hits.empty?
 
@@ -113,6 +120,10 @@ class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
 
       # Get the scroll id from the previous result set and use it for getting the next data set
       scroll_id = result["_scroll_id"]
+      if scroll_id.nil?
+         @logger.warn("no _scroll_id in result", :request => scroll_url)
+         break 
+      end
 
       # Fetch the next result set
       scroll_params = {
@@ -120,17 +131,11 @@ class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
         "scroll" => @scroll
       }
       scroll_url = "http://#{@host}:#{@port}/_search/scroll?#{encode(scroll_params)}"
-
+      @logger.debug("scroll request",:request => scroll_url)
       response = @agent.get!(scroll_url)
       json = ""
       response.read_body { |c| json << c }
       result = JSON.parse(json)
-
-      if result["error"]
-        @logger.warn(result["error"], :request => scroll_url)
-        # TODO(sissel): raise an error instead of breaking
-        break
-      end
 
     end
   rescue LogStash::ShutdownSignal
