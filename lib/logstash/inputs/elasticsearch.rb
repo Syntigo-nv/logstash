@@ -41,6 +41,19 @@ class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
   # The scroll page size, corresponding to the 'size' parameter in the 'search/scroll' API of elasticsearch
   config :scroll_size, :validate=> :number, :default => 1000
 
+  # If true, the event will include meta data of the original elastic document: index ('_index') , document ('_type') and document id ('_id'). By default storted in an 'es_meta' field.
+  # This metadata can be used to in reindexing schemes to update rather than append existing indices 
+  # ( TODO : make the list of metadata fields configurable (?document version field)  )
+  # ( TODO : elasticsearch output will need to use the bulk/create API instead
+  #          of bulk/index API to avoid overwriting existing documents in the target index (idempotency) )
+  # ( TODO : consider alternative approach: include_meta will take the 'hit' document (including metadata) + output codec for
+  #          elastic to index only the '_source' field  )
+  config :include_meta, :validate=> :boolean, :default => false
+  
+  # The (fixed) field name under which metadata of the original elastic document is stored
+  # ( TODO : should this be a dynamic sprintf field ?) 
+  config :meta_field, :validate=> :string, :default => "es_meta"
+
   public
   def register
     require "ftw"
@@ -80,7 +93,13 @@ class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
 
       result["hits"]["hits"].each do |hit|
         event = hit["_source"]
-
+        if @include_meta 
+           event[@meta_field] = { 
+               '_index' => hit['_index'],
+               '_type' => hit['_type'],
+               '_id' => hit['_id']
+           }
+        end
         # Hack to make codecs work
         @codec.decode(event.to_json) do |event|
           decorate(event)
