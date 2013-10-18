@@ -16,7 +16,6 @@ require "logstash/util/socket_peer"
 #       }
 #     }
 #
-# * TODO(sissel): Option to keep the index, type, and doc id so we can do reindexing?
 class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
   config_name "elasticsearch"
   milestone 1
@@ -42,12 +41,34 @@ class LogStash::Inputs::Elasticsearch < LogStash::Inputs::Base
   config :scroll_size, :validate=> :number, :default => 1000
 
   # If true, the event will include meta data of the original elastic document: index ('_index') , document ('_type') and document id ('_id'). By default storted in an 'es_meta' field.
-  # This metadata can be used to in reindexing schemes to update rather than append existing indices 
+  # This metadata can be used to in reindexing scenarios to update rather than append existing indices 
+  #
+  # Example
+  #      input {
+  #        elasticsearch {
+  #           host => "es.production.mysite.org"
+  #           index => "mydata-2018.09.*"
+  #           query => "*"
+  #           scroll_size => 500
+  #           include_meta => true
+  #           meta_field => "es_orig"
+  #        }
+  #      }
+  #      output {
+  #        elasticsearch_http {
+  #          host => "localhost"
+  #          index => "copy-of-production.%{[es_orig][_index]}"
+  #          index_type => "%{[es_orig][_type]}"
+  #          document_id => "%{[es_orig][_id]}"
+  #        }
+  #      }
   # ( TODO : make the list of metadata fields configurable (?document version field)  )
-  # ( TODO : elasticsearch output will need to use the bulk/create API instead
-  #          of bulk/index API to avoid overwriting existing documents in the target index (idempotency) )
-  # ( TODO : consider alternative approach: include_meta will take the 'hit' document (including metadata) + output codec for
-  #          elastic to index only the '_source' field  )
+  # ( TODO : elasticsearch output might need to use the bulk/create API instead
+  #          of bulk/index API to avoid overwriting existing documents in the target index (idempotency)
+  #          This is not yet supported in the elasticsearch outputs )
+  # ( TODO : this solution stores the metadata as normal data on the target index. 
+  #          consider alternative approach: include_meta will take the 'hit' document (including metadata) 
+  #          and configure a custom output codec for elastic to index only the '_source' field )
   config :include_meta, :validate=> :boolean, :default => false
   
   # The (fixed) field name under which metadata of the original elastic document is stored
