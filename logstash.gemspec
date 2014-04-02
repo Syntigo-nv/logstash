@@ -74,7 +74,8 @@ Gem::Specification.new do |gem|
   gem.add_runtime_dependency "sequel"                           #(MIT license)
   gem.add_runtime_dependency "jdbc-sqlite3"                     #(MIT license)
   gem.add_runtime_dependency "bindata", [">= 1.5.0"]            #(ruby license)
-  gem.add_runtime_dependency "twitter", "5.0.0.rc.1"            #(MIT license)
+# removed twitter dependency (conflicts on http_parser 0.5.0 vs 0.6.0)
+#  gem.add_runtime_dependency "twitter", "5.0.0.rc.1"            #(MIT license)
 
   if RUBY_PLATFORM == 'java'
     gem.platform = RUBY_PLATFORM
