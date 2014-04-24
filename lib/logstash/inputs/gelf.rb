@@ -14,7 +14,8 @@ class LogStash::Inputs::Gelf < LogStash::Inputs::Base
   config_name "gelf"
   milestone 2
 
-  default :codec, "plain"
+  # The gelf payload is utf-8-encoded json by specification, so this should normally not be changed
+  default :codec, "json"
 
   # The address to listen on
   config :host, :validate => :string, :default => "0.0.0.0"
@@ -82,16 +83,17 @@ class LogStash::Inputs::Gelf < LogStash::Inputs::Base
       
       # Gelfd parser outputs null if it received and cached a non-final chunk
       next if data.nil?    
- 
-      event = LogStash::Event.new(JSON.parse(data))
-      event["host"] = client[3]
-      if event["timestamp"].is_a?(Numeric)
-        event["@timestamp"] = Time.at(event["timestamp"]).gmtime
-        event.remove("timestamp")
+      
+      @codec.decode(data) do |event| 
+        event["host"] = client[3]
+        if event["timestamp"].is_a?(Numeric)
+          event["@timestamp"] = Time.at(event["timestamp"]).gmtime
+          event.remove("timestamp")
+        end
+        remap_gelf(event) if @remap
+        decorate(event)
+        output_queue << event
       end
-      remap_gelf(event) if @remap
-      decorate(event)
-      output_queue << event
     end
   rescue LogStash::ShutdownSignal
     # Do nothing, shutdown.
